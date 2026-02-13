@@ -121,8 +121,10 @@ body {
     letter-spacing: -2px;
     margin-bottom: 12px;
     word-wrap: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
     line-height: 1.1;
-    transition: opacity 0.2s ease;
+    transition: opacity 0.2s ease, font-size 0.2s ease;
 }
 
 /* Professional Hindi Display - Calculator Style */

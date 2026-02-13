@@ -1,8 +1,7 @@
 // Calculator State
-let currentInput = '0';
-let previousInput = '';
-let operation = null;
-let shouldResetDisplay = false;
+let expression = '0';    // The full expression string (e.g. "2+3*7-6")
+let lastResult = null;   // Stores last result for chaining after "="
+let justCalculated = false; // True right after pressing "="
 
 // DOM Elements
 const display = document.getElementById('display');
@@ -11,12 +10,13 @@ const expressionDisplay = document.getElementById('expression');
 const displayContainer = document.querySelector('.display-container');
 
 // Sound Effects
-const buttonClickSound = new Audio('sounds/button-click.mp3');
-const deleteButtonSound = new Audio('sounds/delete-button-click.mp3');
-const loadingMsgSound = new Audio('sounds/loading-msg-sound.mp3');
-loadingMsgSound.loop = true; // Enable looping for loading sound
+const buttonClickSound = new Audio('Assets/sounds/button-click.mp3');
+const deleteButtonSound = new Audio('Assets/sounds/delete-button-click.mp3');
+const loadingMsgSound = new Audio('Assets/sounds/loading-msg-sound.mp3');
+loadingMsgSound.loop = true;
 
-// Number to Hindi Words Conversion
+// ==================== Hindi Words Conversion ====================
+
 const hindiOnes = ['', 'एक', 'दो', 'तीन', 'चार', 'पाँच', 'छह', 'सात', 'आठ', 'नौ'];
 const hindiTeens = ['दस', 'ग्यारह', 'बारह', 'तेरह', 'चौदह', 'पंद्रह', 'सोलह', 'सत्रह', 'अठारह', 'उन्नीस'];
 const hindiTens = ['', '', 'बीस', 'तीस', 'चालीस', 'पचास', 'साठ', 'सत्तर', 'अस्सी', 'नब्बे'];
@@ -30,19 +30,16 @@ const hindiEighties = ['अस्सी', 'इक्यासी', 'बयास
 const hindiNineties = ['नब्बे', 'इक्यानवे', 'बानवे', 'तिरानवे', 'चौरानवे', 'पचानवे', 'छियानवे', 'सत्तानवे', 'अट्ठानवे', 'निन्यानवे'];
 
 function convertToHindiWords(number) {
-    // Handle special cases
     if (number === 0) return 'शून्य';
     if (isNaN(number)) return 'त्रुटि';
     if (!isFinite(number)) return 'अनंत';
 
-    // Handle negative numbers
     let isNegative = false;
     if (number < 0) {
         isNegative = true;
         number = Math.abs(number);
     }
 
-    // Handle decimal numbers
     let decimalPart = '';
     if (number % 1 !== 0) {
         const parts = number.toString().split('.');
@@ -57,52 +54,40 @@ function convertToHindiWords(number) {
 
     number = Math.floor(number);
 
-    // Handle numbers greater than 99,99,99,999
     if (number > 999999999) {
         return 'बहुत बड़ी संख्या';
     }
 
     let result = '';
 
-    // Crores (करोड़)
     if (number >= 10000000) {
         const crores = Math.floor(number / 10000000);
         result += convertBelowHundred(crores) + ' करोड़ ';
         number %= 10000000;
     }
-
-    // Lakhs (लाख)
     if (number >= 100000) {
         const lakhs = Math.floor(number / 100000);
         result += convertBelowHundred(lakhs) + ' लाख ';
         number %= 100000;
     }
-
-    // Thousands (हज़ार)
     if (number >= 1000) {
         const thousands = Math.floor(number / 1000);
         result += convertBelowHundred(thousands) + ' हज़ार ';
         number %= 1000;
     }
-
-    // Hundreds (सौ)
     if (number >= 100) {
         const hundreds = Math.floor(number / 100);
         result += hindiOnes[hundreds] + ' सौ ';
         number %= 100;
     }
-
-    // Below 100
     if (number > 0) {
         result += convertBelowHundred(number);
     }
 
     result = result.trim();
-
     if (isNegative) {
         result = 'ऋण ' + result;
     }
-
     return result + decimalPart;
 }
 
@@ -120,76 +105,258 @@ function convertBelowHundred(num) {
     if (num >= 90 && num < 100) return hindiNineties[num - 90];
 }
 
-// Sound Effect Helper
+// ==================== Sound Helper ====================
+
 function playSound(sound) {
-    sound.currentTime = 0; // Reset to start
+    sound.currentTime = 0;
     sound.play().catch(err => console.log('Sound play failed:', err));
 }
 
-// Update Display
-function updateDisplay() {
-    display.textContent = currentInput;
+// ==================== BODMAS Expression Parser ====================
 
-    // Update expression display
-    if (operation && previousInput) {
-        let opSymbol = operation;
-        if (operation === '*') opSymbol = '×';
-        if (operation === '/') opSymbol = '÷';
-        if (operation === '-') opSymbol = '−';
-        expressionDisplay.textContent = `${previousInput} ${opSymbol}`;
-    } else {
-        expressionDisplay.textContent = '';
+/**
+ * Tokenizes an expression string into numbers and operators.
+ * Handles negative numbers at the start or after an operator.
+ * Example: "2+3*7-6" -> [2, '+', 3, '*', 7, '-', 6]
+ */
+function tokenize(expr) {
+    const tokens = [];
+    let i = 0;
+
+    while (i < expr.length) {
+        // Skip whitespace
+        if (expr[i] === ' ') { i++; continue; }
+
+        // Check if this is a number (including negative at start or after operator)
+        if (expr[i] >= '0' && expr[i] <= '9' || expr[i] === '.') {
+            let numStr = '';
+            while (i < expr.length && (expr[i] >= '0' && expr[i] <= '9' || expr[i] === '.')) {
+                numStr += expr[i];
+                i++;
+            }
+            tokens.push(parseFloat(numStr));
+        }
+        // Handle negative sign at start of expression or after another operator
+        else if (expr[i] === '-' && (tokens.length === 0 || typeof tokens[tokens.length - 1] === 'string')) {
+            let numStr = '-';
+            i++;
+            while (i < expr.length && (expr[i] >= '0' && expr[i] <= '9' || expr[i] === '.')) {
+                numStr += expr[i];
+                i++;
+            }
+            tokens.push(parseFloat(numStr));
+        }
+        // Operators
+        else if (['+', '-', '*', '/'].includes(expr[i])) {
+            tokens.push(expr[i]);
+            i++;
+        } else {
+            // Skip unknown characters
+            i++;
+        }
     }
+
+    return tokens;
 }
 
-// Input Number
+/**
+ * Evaluates a tokenized expression using BODMAS (two-pass approach).
+ * Pass 1: Evaluate * and / (left to right)
+ * Pass 2: Evaluate + and - (left to right)
+ * Returns the result number, or throws an error string.
+ */
+function evaluateTokens(tokens) {
+    if (tokens.length === 0) return 0;
+    if (tokens.length === 1) return tokens[0];
+
+    // Pass 1: Handle * and / (higher precedence)
+    let pass1 = [];
+    let i = 0;
+    while (i < tokens.length) {
+        if (typeof tokens[i] === 'string' && (tokens[i] === '*' || tokens[i] === '/')) {
+            const left = pass1.pop();
+            const right = tokens[i + 1];
+
+            if (tokens[i] === '*') {
+                pass1.push(left * right);
+            } else {
+                if (right === 0) {
+                    throw 'Division by zero';
+                }
+                pass1.push(left / right);
+            }
+            i += 2; // skip operator and right operand
+        } else {
+            pass1.push(tokens[i]);
+            i++;
+        }
+    }
+
+    // Pass 2: Handle + and - (lower precedence)
+    let result = pass1[0];
+    i = 1;
+    while (i < pass1.length) {
+        const op = pass1[i];
+        const right = pass1[i + 1];
+
+        if (op === '+') {
+            result += right;
+        } else if (op === '-') {
+            result -= right;
+        }
+        i += 2;
+    }
+
+    return result;
+}
+
+/**
+ * Full expression evaluator: tokenize -> evaluate with BODMAS.
+ */
+function evaluateExpression(expr) {
+    const tokens = tokenize(expr);
+    return evaluateTokens(tokens);
+}
+
+// ==================== Helper Functions ====================
+
+/** Check if the last character of the expression is an operator */
+function lastCharIsOperator() {
+    const last = expression[expression.length - 1];
+    return ['+', '-', '*', '/'].includes(last);
+}
+
+/** Get the current number segment (last number being typed) */
+function getCurrentNumberSegment() {
+    // Find the last operator position
+    let lastOpIndex = -1;
+    for (let i = expression.length - 1; i >= 0; i--) {
+        if (['+', '-', '*', '/'].includes(expression[i])) {
+            // Make sure it's not a negative sign at the start or after another operator
+            if (i === 0 || ['+', '-', '*', '/'].includes(expression[i - 1])) {
+                continue; // This is a negative sign, not an operator
+            }
+            lastOpIndex = i;
+            break;
+        }
+    }
+    return expression.substring(lastOpIndex + 1);
+}
+
+/** Prettify the expression for display (replace operators with symbols) */
+function prettifyExpression(expr) {
+    return expr
+        .replace(/\*/g, '×')
+        .replace(/\//g, '÷');
+}
+
+// ==================== Display ====================
+
+function updateDisplay() {
+    // Show the full expression in the main display
+    display.textContent = prettifyExpression(expression);
+
+    // Auto-shrink font for long expressions
+    if (expression.length > 12) {
+        display.style.fontSize = '32px';
+    } else if (expression.length > 8) {
+        display.style.fontSize = '40px';
+    } else {
+        display.style.fontSize = '48px';
+    }
+
+    // Clear the expression line (we show everything in main display now)
+    expressionDisplay.textContent = '';
+}
+
+// ==================== Calculator Actions ====================
+
 function inputNumber(num) {
     playSound(buttonClickSound);
-    if (shouldResetDisplay) {
-        currentInput = num;
-        shouldResetDisplay = false;
+
+    // If we just calculated, start a fresh expression
+    if (justCalculated) {
+        expression = num;
+        justCalculated = false;
+        // Remove result-mode to go back to normal calculator display
+        displayContainer.classList.remove('result-mode');
+        hindiDisplay.textContent = '';
+        hindiDisplay.className = 'hindi-display';
     } else {
-        currentInput = currentInput === '0' ? num : currentInput + num;
+        // Replace leading '0' (but not '0.')
+        if (expression === '0') {
+            expression = num;
+        } else {
+            expression += num;
+        }
     }
     updateDisplay();
 }
 
-// Input Decimal
 function inputDecimal() {
     playSound(buttonClickSound);
-    if (shouldResetDisplay) {
-        currentInput = '0.';
-        shouldResetDisplay = false;
-    } else if (!currentInput.includes('.')) {
-        currentInput += '.';
+
+    if (justCalculated) {
+        expression = '0.';
+        justCalculated = false;
+        displayContainer.classList.remove('result-mode');
+        hindiDisplay.textContent = '';
+        hindiDisplay.className = 'hindi-display';
+        updateDisplay();
+        return;
+    }
+
+    // Only add a decimal if the current number segment doesn't have one
+    const currentNum = getCurrentNumberSegment();
+    if (!currentNum.includes('.')) {
+        // If last char is an operator, insert "0." for convenience
+        if (lastCharIsOperator() || expression === '') {
+            expression += '0.';
+        } else {
+            expression += '.';
+        }
     }
     updateDisplay();
 }
 
-// Input Operator
 function inputOperator(op) {
     playSound(buttonClickSound);
-    if (operation !== null && !shouldResetDisplay) {
-        calculate();
+
+    // If we just calculated, continue from the result
+    if (justCalculated) {
+        justCalculated = false;
+        displayContainer.classList.remove('result-mode');
+        hindiDisplay.textContent = '';
+        hindiDisplay.className = 'hindi-display';
+        // expression already holds the result string
     }
-    previousInput = currentInput;
-    operation = op;
-    shouldResetDisplay = true;
+
+    // If the expression is just "0" and operator is minus, allow negative start
+    if (expression === '0' && op === '-') {
+        expression = '-';
+        updateDisplay();
+        return;
+    }
+
+    // If last character is an operator, replace it (prevent consecutive operators)
+    if (lastCharIsOperator()) {
+        expression = expression.slice(0, -1) + op;
+    } else {
+        expression += op;
+    }
     updateDisplay();
 }
 
-// Calculate Result
 async function calculate() {
-    if (operation === null || shouldResetDisplay) return;
+    // Don't calculate if expression ends with operator or is empty/just "0"
+    if (lastCharIsOperator() || expression === '0' || expression === '' || expression === '-') return;
 
-    // Play button click sound (same as other buttons) and start loading sound
     playSound(buttonClickSound);
 
-    const prev = parseFloat(previousInput);
-    const current = parseFloat(currentInput);
-    let result;
+    // Save the expression for display
+    const fullExpression = expression;
 
-    // Funny loading messages
+    // Show loading animation
     const loadingMessages = [
         '🤔 Calculating...',
         '🧮 Applying quantum logic...',
@@ -199,147 +366,159 @@ async function calculate() {
         '🎯 Almost there...'
     ];
 
-    // Clear expression and show loading
-    expressionDisplay.textContent = '';
+    expressionDisplay.textContent = prettifyExpression(fullExpression) + ' =';
     hindiDisplay.className = 'hindi-display loading';
 
-    // Start loading sound
     loadingMsgSound.currentTime = 0;
     loadingMsgSound.play().catch(err => console.log('Loading sound failed:', err));
 
-    // Show loading messages one by one
     for (let i = 0; i < loadingMessages.length; i++) {
         hindiDisplay.textContent = loadingMessages[i];
-        await new Promise(resolve => setTimeout(resolve, 700)); // 700ms per message
+        await new Promise(resolve => setTimeout(resolve, 700));
     }
 
-    // Stop loading sound
     loadingMsgSound.pause();
     loadingMsgSound.currentTime = 0;
 
-    // Perform calculation
-    switch (operation) {
-        case '+':
-            result = prev + current;
-            break;
-        case '-':
-            result = prev - current;
-            break;
-        case '*':
-            result = prev * current;
-            break;
-        case '/':
-            if (current === 0) {
-                // Stop loading sound on error
-                loadingMsgSound.pause();
-                loadingMsgSound.currentTime = 0;
+    // Evaluate the expression with BODMAS
+    let result;
+    try {
+        result = evaluateExpression(fullExpression);
+    } catch (err) {
+        // Division by zero or parse error
+        display.textContent = 'Error';
+        hindiDisplay.className = 'hindi-display';
+        hindiDisplay.textContent = 'त्रुटि: शून्य से विभाजन';
+        expression = '0';
+        justCalculated = true;
+        return;
+    }
 
-                currentInput = 'Error';
-                hindiDisplay.className = 'hindi-display';
-                hindiDisplay.textContent = 'त्रुटि: शून्य से विभाजन';
-                operation = null;
-                previousInput = '';
-                shouldResetDisplay = true;
-                return;
-            }
-            result = prev / current;
-            break;
-        default:
-            // Stop loading sound if returning early
-            loadingMsgSound.pause();
-            loadingMsgSound.currentTime = 0;
-            return;
+    // Check for invalid results
+    if (!isFinite(result) || isNaN(result)) {
+        display.textContent = 'Error';
+        hindiDisplay.className = 'hindi-display';
+        hindiDisplay.textContent = 'त्रुटि';
+        expression = '0';
+        justCalculated = true;
+        return;
     }
 
     // Round to avoid floating point errors
     result = Math.round(result * 100000000) / 100000000;
 
-    currentInput = result.toString();
-    operation = null;
-    previousInput = '';
-    shouldResetDisplay = true;
+    // Store result as the new expression (for chaining)
+    expression = result.toString();
+    justCalculated = true;
 
-    // Update the numeric display
-    display.textContent = currentInput;
+    // Show result in main display
+    display.textContent = expression;
+    display.style.fontSize = expression.length > 12 ? '32px' : expression.length > 8 ? '40px' : '48px';
 
-    // Show final Hindi result in professional calculator display mode
-    const numericValue = parseFloat(currentInput);
+    // Show Hindi result
     hindiDisplay.className = 'hindi-display result';
-    hindiDisplay.textContent = convertToHindiWords(numericValue);
+    hindiDisplay.textContent = convertToHindiWords(result);
 
-    // Enable result-mode: hide numeric displays, show only Hindi result centered
+    // Enable result-mode
     displayContainer.classList.add('result-mode');
 }
 
-// Clear All
 function clearAll() {
     playSound(buttonClickSound);
-    currentInput = '0';
-    previousInput = '';
-    operation = null;
-    shouldResetDisplay = false;
+    expression = '0';
+    justCalculated = false;
     hindiDisplay.textContent = '';
     hindiDisplay.className = 'hindi-display';
-
-    // Remove result-mode to show normal calculator display
     displayContainer.classList.remove('result-mode');
-
+    display.style.fontSize = '48px';
     updateDisplay();
 }
 
-// Delete Last Character
 function deleteLast() {
     playSound(deleteButtonSound);
-    if (currentInput.length > 1) {
-        currentInput = currentInput.slice(0, -1);
+
+    // If showing a result, clear everything
+    if (justCalculated) {
+        clearAll();
+        return;
+    }
+
+    if (expression.length > 1) {
+        expression = expression.slice(0, -1);
     } else {
-        currentInput = '0';
+        expression = '0';
     }
     updateDisplay();
 }
 
-// Toggle Sign
 function toggleSign() {
     playSound(buttonClickSound);
-    if (currentInput !== '0') {
-        currentInput = currentInput.startsWith('-')
-            ? currentInput.slice(1)
-            : '-' + currentInput;
-        updateDisplay();
+
+    if (justCalculated) {
+        // Toggle sign of the result
+        if (expression.startsWith('-')) {
+            expression = expression.slice(1);
+        } else if (expression !== '0') {
+            expression = '-' + expression;
+        }
+        display.textContent = expression;
+        return;
     }
+
+    // For expressions, toggle sign is complex — we'll toggle the current number segment
+    // Find the start of the current number segment
+    let lastOpIndex = -1;
+    for (let i = expression.length - 1; i >= 0; i--) {
+        if (['+', '-', '*', '/'].includes(expression[i])) {
+            if (i === 0) {
+                // Leading negative sign
+                lastOpIndex = 0;
+                break;
+            }
+            if (['+', '-', '*', '/'].includes(expression[i - 1])) {
+                // Negative sign after operator (e.g., "5*-3")
+                continue;
+            }
+            lastOpIndex = i;
+            break;
+        }
+    }
+
+    if (lastOpIndex === -1) {
+        // Entire expression is one number
+        if (expression.startsWith('-')) {
+            expression = expression.slice(1);
+        } else if (expression !== '0') {
+            expression = '-' + expression;
+        }
+    }
+    // For multi-part expressions, toggle sign is less straightforward
+    // so we keep it simple for the single-number case
+
+    updateDisplay();
 }
 
-// Keyboard Support
+// ==================== Keyboard Support ====================
+
 document.addEventListener('keydown', (event) => {
     const key = event.key;
 
-    // Numbers
     if (key >= '0' && key <= '9') {
         inputNumber(key);
-    }
-    // Operators
-    else if (key === '+' || key === '-' || key === '*' || key === '/') {
+    } else if (key === '+' || key === '-' || key === '*' || key === '/') {
         inputOperator(key);
-    }
-    // Decimal
-    else if (key === '.') {
+    } else if (key === '.') {
         inputDecimal();
-    }
-    // Calculate
-    else if (key === 'Enter' || key === '=') {
+    } else if (key === 'Enter' || key === '=') {
         event.preventDefault();
         calculate();
-    }
-    // Clear
-    else if (key === 'Escape' || key.toLowerCase() === 'c') {
+    } else if (key === 'Escape' || key.toLowerCase() === 'c') {
         clearAll();
-    }
-    // Backspace
-    else if (key === 'Backspace') {
+    } else if (key === 'Backspace') {
         event.preventDefault();
         deleteLast();
     }
 });
 
-// Initialize Display
+// ==================== Initialize ====================
 updateDisplay();
